@@ -1,0 +1,152 @@
+{
+  "about": "Questions with known answers for the simulated day in data/cnc_sim_data.csv (2 Nov 2026, Shift 1, V60 V61 V62). Built from assistant/fixture.py. 'expect' lists the values a correct answer must contain. Answerable questions name the lookup that holds the answer, so tests/test_assistant_testset.py can check the data side without the model. The Marathi and Hindi questions are a first draft and need checking by a native speaker.",
+  "questions": [
+    {"id": "downtime-v60-no-operator", "category": "downtime",
+     "question": {"en": "How much time did V60 lose to NO_OPERATOR?",
+                  "mr": "V60 ला ऑपरेटर नसल्यामुळे (NO_OPERATOR) किती वेळ वाया गेला?",
+                  "hi": "V60 का कितना समय ऑपरेटर न होने (NO_OPERATOR) की वजह से बर्बाद हुआ?"},
+     "answerable": true, "expect": ["6.2"], "check": {"tool": "get_downtime", "args": {"machine": "V60"}}},
+
+    {"id": "oee-shop", "category": "oee",
+     "question": {"en": "What was the OEE of the whole shop today?",
+                  "mr": "आज संपूर्ण शॉपचा OEE किती होता?",
+                  "hi": "आज पूरी शॉप का OEE कितना था?"},
+     "answerable": true, "expect": ["60.5"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "oee-highest", "category": "oee",
+     "question": {"en": "Which machine had the highest OEE?",
+                  "mr": "सगळ्यात जास्त OEE कोणत्या मशीनचा होता?",
+                  "hi": "सबसे ज़्यादा OEE किस मशीन का था?"},
+     "answerable": true, "expect": ["V62", "73.0"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "oee-lowest", "category": "oee",
+     "question": {"en": "Which machine had the lowest OEE?"},
+     "answerable": true, "expect": ["V61", "49.8"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "availability-v61", "category": "oee",
+     "question": {"en": "What was V61's availability?"},
+     "answerable": true, "expect": ["55.8"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "performance-v60", "category": "oee",
+     "question": {"en": "What was the performance of V60?"},
+     "answerable": true, "expect": ["96.9"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "parts-shop", "category": "parts",
+     "question": {"en": "How many parts did the shop make today?"},
+     "answerable": true, "expect": ["430"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "parts-v61", "category": "parts",
+     "question": {"en": "How many parts did V61 make?"},
+     "answerable": true, "expect": ["210"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "downtime-v61-top", "category": "downtime",
+     "question": {"en": "What was the biggest cause of lost time on V61?",
+                  "mr": "V61 वर सगळ्यात जास्त वेळ कशामुळे वाया गेला?",
+                  "hi": "V61 पर सबसे ज़्यादा समय किस वजह से बर्बाद हुआ?"},
+     "answerable": true, "expect": ["LOADING", "125.1"], "check": {"tool": "get_downtime", "args": {"machine": "V61"}}},
+
+    {"id": "downtime-v62-no-operator", "category": "downtime",
+     "question": {"en": "How many minutes did V62 stand still because no operator was there?"},
+     "answerable": true, "expect": ["34.6"], "check": {"tool": "get_downtime", "args": {"machine": "V62"}}},
+
+    {"id": "longest-stop-v61", "category": "downtime",
+     "question": {"en": "What was the longest single stop on V61?",
+                  "mr": "V61 चा सगळ्यात मोठा थांबा कोणता होता?",
+                  "hi": "V61 का सबसे लंबा स्टॉप कौन सा था?"},
+     "answerable": true, "expect": ["13.9", "NO_MATERIAL", "09:25"], "check": {"tool": "get_downtime", "args": {"machine": "V61"}}},
+
+    {"id": "longest-stop-v60", "category": "downtime",
+     "question": {"en": "How long was V60's longest stop, and why did it happen?"},
+     "answerable": true, "expect": ["28.2", "SETUP", "08:50"], "check": {"tool": "get_downtime", "args": {"machine": "V60"}}},
+
+    {"id": "drift-any", "category": "drift",
+     "question": {"en": "Is any machine getting slower?",
+                  "mr": "कोणतं मशीन हळू होत चाललंय का?",
+                  "hi": "क्या कोई मशीन धीमी होती जा रही है?"},
+     "answerable": true, "expect": ["V61", "5315"], "check": {"tool": "get_drift", "args": {"machine": null}}},
+
+    {"id": "drift-v61-now", "category": "drift",
+     "question": {"en": "How much slower than ideal are V61's latest parts?"},
+     "answerable": true, "expect": ["19.6"], "check": {"tool": "get_drift", "args": {"machine": "V61"}}},
+
+    {"id": "maintenance-soonest", "category": "maintenance",
+     "question": {"en": "Which machine needs maintenance first?",
+                  "mr": "कोणत्या मशीनला लवकरात लवकर मेंटेनन्सची गरज आहे?",
+                  "hi": "किस मशीन को सबसे पहले मेंटेनेंस की ज़रूरत है?"},
+     "answerable": true, "expect": ["V61", "Spindle grease", "24.0"], "check": {"tool": "get_maintenance", "args": {"machine": null}}},
+
+    {"id": "maintenance-v60-grease", "category": "maintenance",
+     "question": {"en": "How many cutting hours are left before V60's spindle grease is due?"},
+     "answerable": true, "expect": ["11.1"], "check": {"tool": "get_maintenance", "args": {"machine": "V60"}}},
+
+    {"id": "failures-count", "category": "failures",
+     "question": {"en": "How many machine failures were there today?"},
+     "answerable": true, "expect": ["0"], "check": {"tool": "get_failures", "args": {"machine": null}}},
+
+    {"id": "run-time-v62", "category": "time",
+     "question": {"en": "How long did V62 actually run today?"},
+     "answerable": true, "expect": ["345.3"], "check": {"tool": "get_overview", "args": {}}},
+
+    {"id": "stops-v60", "category": "downtime",
+     "question": {"en": "How many times did V60 stop?"},
+     "answerable": true, "expect": ["143"], "check": {"tool": "get_downtime", "args": {"machine": "V60"}}},
+
+    {"id": "downtime-v61-total", "category": "downtime",
+     "question": {"en": "How much downtime did V61 have in total?"},
+     "answerable": true, "expect": ["198.9"], "check": {"tool": "get_downtime", "args": {"machine": "V61"}}},
+
+    {"id": "downtime-most", "category": "downtime",
+     "question": {"en": "Which machine lost the most time to stops?"},
+     "answerable": true, "expect": ["V61", "198.9"], "check": {"tool": "get_downtime", "args": {"machine": null}}},
+
+    {"id": "setup-share-v60", "category": "downtime",
+     "question": {"en": "What share of V60's downtime was setup?"},
+     "answerable": true, "expect": ["28.9"], "check": {"tool": "get_downtime", "args": {"machine": "V60"}}},
+
+    {"id": "setup-time-v60", "category": "downtime",
+     "question": {"en": "How much setup time did V60 have?"},
+     "answerable": true, "expect": ["51.3"], "check": {"tool": "get_downtime", "args": {"machine": "V60"}}},
+
+    {"id": "loading-shop", "category": "downtime",
+     "question": {"en": "How much time did loading take across all machines?"},
+     "answerable": true, "expect": ["252.5"], "check": {"tool": "get_downtime", "args": {"machine": null}}},
+
+    {"id": "parts-v60-5315", "category": "parts",
+     "question": {"en": "How many parts of program 5315 did V60 make?"},
+     "answerable": true, "expect": ["72"], "check": {"tool": "get_parts", "args": {"machine": "V60", "program": 5315}}},
+
+    {"id": "cycle-v62-1509", "category": "parts",
+     "question": {"en": "What was the average cycle time of program 1509 on V62?"},
+     "answerable": true, "expect": ["297.4"], "check": {"tool": "get_parts", "args": {"machine": "V62", "program": 1509}}},
+
+    {"id": "coverage", "category": "data",
+     "question": {"en": "Was any machine data missing today?"},
+     "answerable": true, "expect": ["100"], "check": {"tool": "get_data_coverage", "args": {"machine": null}}},
+
+    {"id": "no-quality", "category": "cannot answer",
+     "question": {"en": "How many rejected parts did we have today?"},
+     "answerable": false, "expect": []},
+
+    {"id": "no-yesterday", "category": "cannot answer",
+     "question": {"en": "What was yesterday's OEE?",
+                  "mr": "कालचा OEE किती होता?",
+                  "hi": "कल का OEE कितना था?"},
+     "answerable": false, "expect": []},
+
+    {"id": "no-energy", "category": "cannot answer",
+     "question": {"en": "How much electricity did V60 use today?"},
+     "answerable": false, "expect": []},
+
+    {"id": "no-operator-names", "category": "cannot answer",
+     "question": {"en": "Which operator was working on V61?"},
+     "answerable": false, "expect": []},
+
+    {"id": "no-such-machine", "category": "cannot answer",
+     "question": {"en": "What was the OEE of V99?"},
+     "answerable": false, "expect": []},
+
+    {"id": "no-orders", "category": "cannot answer",
+     "question": {"en": "When will order 451 be delivered?"},
+     "answerable": false, "expect": []}
+  ]
+}
