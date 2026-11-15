@@ -1,6 +1,7 @@
 # reads one client's settings file
 
 import json
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -28,10 +29,15 @@ DEFAULTS = {
     # the end-of-shift message. No recipients = no message.
     # Each recipient: {"name": "Owner", "phone": "+919812345678", "lang": "mr"}
     "whatsapp": {
-        "provider": "file",        # "file" writes to output/messages/, "wasender" sends
+        "provider": "file",        # "file" writes to output/messages/, "meta" or "wasender" sends
         "recipients": [],
         "seconds_between": 6,      # WasenderAPI's account protection allows 1 message per 5 s
         "max_attempts": 6,
+        # Meta's official API: the number to send from (API Setup in the Meta app) and the
+        # approved template. The token stays in the WHATSAPP_TOKEN environment variable.
+        "meta_phone_number_id": "",
+        "meta_template": "shift_report",
+        "meta_api_version": "v27.0",
     },
 }
 
@@ -160,6 +166,12 @@ def check(s):
         raise ValueError(f"whatsapp: provider must be one of {', '.join(PROVIDERS)}")
     if w["seconds_between"] < 0 or w["max_attempts"] < 1:
         raise ValueError("whatsapp: seconds_between 0 or more, max_attempts 1 or more")
+    if w["provider"] == "meta" and not str(w["meta_phone_number_id"]).isdigit():
+        raise ValueError("whatsapp: meta_phone_number_id must be the number ID from API Setup (digits only)")
+    if not re.fullmatch(r"[a-z0-9_]+", w["meta_template"]):
+        raise ValueError("whatsapp: meta_template is written in small letters, digits and _")
+    if not re.fullmatch(r"v\d+\.\d+", w["meta_api_version"]):
+        raise ValueError("whatsapp: meta_api_version looks like v27.0")
     phones = []
     for r in w["recipients"]:
         r.setdefault("lang", "en")

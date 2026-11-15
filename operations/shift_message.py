@@ -7,6 +7,7 @@
 #   python operations/shift_message.py --send                 send the messages that are waiting
 #   python operations/shift_message.py --retry-failed         try the failed ones again
 #   python operations/shift_message.py --test +919812345678   send one test message
+#   python operations/shift_message.py --template             the Meta template to submit, per language
 #
 # A message is queued in the outbox when its shift report is written, in the same step,
 # so a restart cannot lose it or queue it twice. auto_run.py sends what is waiting.
@@ -46,6 +47,8 @@ PHRASES = {
         "no_reason": "UNKNOWN (no reason tapped)",
         "not_available": "not available",
         "test": "Test message from the machine monitoring system. Shift messages will come to this number.",
+        "none": "nothing",
+        "more": "and {n} more",
     },
     "mr": {
         "parts": "बनलेले पार्ट्स: {n}",
@@ -65,6 +68,8 @@ PHRASES = {
         "no_reason": "UNKNOWN (कारण टाकले नाही)",
         "not_available": "उपलब्ध नाही",
         "test": "मशीन मॉनिटरिंग सिस्टमकडून टेस्ट मेसेज. शिफ्टचे मेसेज या नंबरवर येतील.",
+        "none": "काही नाही",
+        "more": "आणखी {n}",
     },
     "hi": {
         "parts": "बने पार्ट्स: {n}",
@@ -84,10 +89,28 @@ PHRASES = {
         "no_reason": "UNKNOWN (कारण नहीं डाला गया)",
         "not_available": "उपलब्ध नहीं",
         "test": "मशीन मॉनिटरिंग सिस्टम से टेस्ट मैसेज. शिफ्ट के मैसेज इसी नंबर पर आएंगे.",
+        "none": "कुछ नहीं",
+        "more": "और {n}",
     },
 }
 
 QUALITY_NOTE = "quality not measured"
+
+# Meta's official API only starts a chat with an approved template. The values put into a
+# template cannot hold line breaks, so the layout lives in the template and each value is one
+# line. Submit these in WhatsApp Manager as a Utility template, one per language
+# (python operations/shift_message.py --template prints them with sample values).
+# A template must not start or end with a value, hence the fixed first and last lines.
+TEMPLATES = {
+    "en": ("Shift report: {{1}}\nShop: {{2}}\n\nParts made: {{3}}\nOEE: {{4}}\n\n"
+           "Why: {{5}}\n\nTo look at: {{6}}\n\nSent by the machine monitoring system."),
+    "mr": ("शिफ्ट रिपोर्ट: {{1}}\nशॉप: {{2}}\n\nबनलेले पार्ट्स: {{3}}\nOEE: {{4}}\n\n"
+           "कारण: {{5}}\n\nलक्ष द्या: {{6}}\n\nमशीन मॉनिटरिंग सिस्टमकडून पाठवले."),
+    "hi": ("शिफ्ट रिपोर्ट: {{1}}\nशॉप: {{2}}\n\nबने पार्ट्स: {{3}}\nOEE: {{4}}\n\n"
+           "कारण: {{5}}\n\nध्यान दें: {{6}}\n\nमशीन मॉनिटरिंग सिस्टम से भेजा गया."),
+}
+# Meta's limit for a template body, with the values filled in
+BODY_LIMIT = 1024
 
 
 # ---- writing the message
@@ -198,29 +221,75 @@ def longest_stop(rows, t):
                                at=stop["started_ist"])
 
 
-def compose(settings, rows, context, lang="en"):
+def facts(settings, rows, context, lang="en"):
+    # what one shift's message says, before it is laid out as text or as template values
     # rows = the shift_summary rows of one shift, one per machine
     t = PHRASES[lang]
     first = rows.iloc[0]
     day = datetime.strptime(first["date"], "%Y-%m-%d").strftime("%d-%m-%Y")
+    order = rows.sort_values("oee_pct", ascending=False, na_position="last")
+    return {
+        "shift": f"{first['shift']}, {day}, {first['window']}",
+        "client": settings["client"],
+        "parts": int(rows["parts"].sum()),
+        "machines": [t["machine"].format(m=r["machine"], oee=pct(r["oee_pct"], t), parts=int(r["parts"]))
+                     for _, r in order.iterrows()],
+        "why": [x for x in (why_lowest(rows, t), longest_stop(rows, t)) if x],
+        "look": to_look_at(settings, rows, context, t),
+        "quality": all(QUALITY_NOTE in as_list(n) for n in rows["notes"]),
+    }
 
-    lines = [f"{first['shift']}, {day}, {first['window']}", settings["client"], ""]
-    lines.append(t["parts"].format(n=int(rows["parts"].sum())))
-    for _, r in rows.sort_values("oee_pct", ascending=False, na_position="last").iterrows():
-        lines.append(t["machine"].format(m=r["machine"], oee=pct(r["oee_pct"], t), parts=int(r["parts"])))
 
-    explained = [x for x in (why_lowest(rows, t), longest_stop(rows, t)) if x]
-    if explained:
-        lines += [""] + explained
+def compose(settings, rows, context, lang="en"):
+    # the message as free text, for the file and WasenderAPI senders
+    t = PHRASES[lang]
+    f = facts(settings, rows, context, lang)
 
-    items = to_look_at(settings, rows, context, t)
-    if items:
-        lines += ["", t["look"]] + [f"- {i}" for i in items]
-
-    if all(QUALITY_NOTE in as_list(n) for n in rows["notes"]):
+    lines = [f["shift"], f["client"], "", t["parts"].format(n=f["parts"])] + f["machines"]
+    if f["why"]:
+        lines += [""] + f["why"]
+    if f["look"]:
+        lines += ["", t["look"]] + [f"- {i}" for i in f["look"]]
+    if f["quality"]:
         lines += ["", t["quality"]]
-
     return "\n".join(lines)
+
+
+def one_line(text):
+    # template values may not hold line breaks, tabs or long runs of spaces
+    return " ".join(str(text).split())
+
+
+def fill(template, values):
+    out = template
+    for i, v in enumerate(values, 1):
+        out = out.replace("{{%d}}" % i, v)
+    return out
+
+
+def template_values(settings, rows, context, lang="en"):
+    # the six values for the Meta template, kept inside its 1024 character limit
+    t = PHRASES[lang]
+    f = facts(settings, rows, context, lang)
+    look = f["look"] + ([t["quality"]] if f["quality"] else [])
+
+    def values(shown):
+        rest = len(look) - len(shown)
+        items = shown + ([t["more"].format(n=rest)] if rest else [])
+        return [one_line(v) for v in (
+            f["shift"], f["client"], f["parts"], "; ".join(f["machines"]),
+            " ".join(f["why"]) or t["none"], "; ".join(items) or t["none"])]
+
+    # too long: leave out the last things to look at, and say how many were left out
+    shown = list(look)
+    while len(fill(TEMPLATES[lang], values(shown))) > BODY_LIMIT and shown:
+        shown.pop()
+    out = values(shown)
+    over = len(fill(TEMPLATES[lang], out)) - BODY_LIMIT
+    if over > 0:
+        # a shop with very many machines: shorten the OEE line
+        out[3] = out[3][: max(len(out[3]) - over - 3, 1)] + "..."
+    return out
 
 
 # ---- the outbox
@@ -235,9 +304,12 @@ def open_outbox(con):
         CREATE TABLE IF NOT EXISTS outbox (
             date TEXT, shift TEXT, name TEXT, phone TEXT, lang TEXT, text TEXT,
             status TEXT, attempts INTEGER, next_try_at TEXT, last_error TEXT,
-            message_id TEXT, queued_at TEXT, sent_at TEXT,
+            message_id TEXT, queued_at TEXT, sent_at TEXT, params TEXT,
             PRIMARY KEY (date, shift, phone)
         )""")
+    # an outbox made before template values were kept
+    if "params" not in {row[1] for row in con.execute("PRAGMA table_info(outbox)")}:
+        con.execute("ALTER TABLE outbox ADD COLUMN params TEXT")
 
 
 def queue(con, settings, rows, context):
@@ -252,9 +324,11 @@ def queue(con, settings, rows, context):
     added = 0
     for r in recipients:
         cur = con.execute(
-            "INSERT OR IGNORE INTO outbox VALUES (?,?,?,?,?,?,'PENDING',0,?,NULL,NULL,?,NULL)",
+            "INSERT OR IGNORE INTO outbox (date, shift, name, phone, lang, text, status, attempts, "
+            "next_try_at, queued_at, params) VALUES (?,?,?,?,?,?,'PENDING',0,?,?,?)",
             (first["date"], first["shift"], r["name"], r["phone"], r["lang"],
-             compose(settings, rows, context, r["lang"]), now, now),
+             compose(settings, rows, context, r["lang"]), now, now,
+             json.dumps(template_values(settings, rows, context, r["lang"]), ensure_ascii=False)),
         )
         added += cur.rowcount
     return added
@@ -270,7 +344,7 @@ def deliver(settings, results_db=RESULTS_DB, sender=None, now=None, sleep=time.s
         con.commit()
         now = now or datetime.now(timezone.utc)
         due = con.execute(
-            "SELECT date, shift, name, phone, text, attempts FROM outbox "
+            "SELECT date, shift, name, phone, text, attempts, lang, params FROM outbox "
             "WHERE status='PENDING' AND next_try_at <= ? ORDER BY queued_at, name",
             (utc_text(now),),
         ).fetchall()
@@ -278,11 +352,12 @@ def deliver(settings, results_db=RESULTS_DB, sender=None, now=None, sleep=time.s
             return done
         sender = sender or make_sender(settings)
 
-        for i, (date, shift, name, phone, text, attempts) in enumerate(due):
+        for i, (date, shift, name, phone, text, attempts, lang, params) in enumerate(due):
             if i:
                 # one at a time, spaced out, so the number does not look like a spammer
                 sleep(w["seconds_between"])
-            result = sender.send(phone, text, f"{date}_{shift}_{name}")
+            result = sender.send(phone, text, f"{date}_{shift}_{name}",
+                                 lang=lang, params=json.loads(params) if params else None)
             attempts += 1
             key = (date, shift, phone)
 
@@ -321,6 +396,16 @@ def retry_failed(results_db=RESULTS_DB):
         con.close()
 
 
+def reset(results_db=RESULTS_DB):
+    # forget every queued and sent message, so a test day can be sent again
+    con = sqlite3.connect(results_db, timeout=30)
+    try:
+        con.execute("DROP TABLE IF EXISTS outbox")
+        con.commit()
+    finally:
+        con.close()
+
+
 def latest_shift(results_db):
     summary = query(results_db, "SELECT * FROM shift_summary")
     if summary.empty:
@@ -338,6 +423,7 @@ if __name__ == "__main__":
     p.add_argument("--send", action="store_true", help="send the messages that are waiting")
     p.add_argument("--retry-failed", action="store_true", help="put failed messages back in the queue")
     p.add_argument("--test", metavar="PHONE", help="send one test message to this number")
+    p.add_argument("--template", action="store_true", help="print the Meta templates with sample values")
     a = p.parse_args()
     s = load_settings(a.settings)
     # Marathi and Hindi must print even when the output goes to a file on Windows
@@ -347,12 +433,25 @@ if __name__ == "__main__":
         rows = latest_shift(a.db)
         print(compose(s, rows, load_context(a.db), a.lang) if rows is not None else "no shift results yet")
 
+    if a.template:
+        rows = latest_shift(a.db)
+        if rows is None:
+            raise SystemExit("no shift results to take sample values from. Run run_all.py first.")
+        context = load_context(a.db)
+        for lang in PHRASES:
+            print(f"==== name {s['whatsapp']['meta_template']}, category Utility, language {lang}")
+            print(TEMPLATES[lang])
+            print()
+            for i, v in enumerate(template_values(s, rows, context, lang), 1):
+                print("sample {{%d}}: %s" % (i, v))
+            print()
+
     if a.test:
         try:
-            r = make_sender(s).send(a.test, PHRASES[a.lang]["test"], "test")
+            r = make_sender(s).test(a.test, PHRASES[a.lang]["test"])
         except SendError as e:
             raise SystemExit(f"cannot send: {e}")
-        print("sent" if r.ok else f"not sent: {r.error}")
+        print(f"sent ({r.message_id})" if r.ok else f"not sent: {r.error}")
 
     if a.retry_failed:
         print(f"{retry_failed(a.db)} failed message(s) queued again")
@@ -364,7 +463,7 @@ if __name__ == "__main__":
         except SendError as e:
             raise SystemExit(f"cannot send: {e}")
 
-    if not (a.show or a.test):
+    if not (a.show or a.test or a.template):
         try:
             box = query(a.db, "SELECT date, shift, name, status, attempts, last_error FROM outbox ORDER BY queued_at")
             print(box.to_string(index=False) if not box.empty else "outbox is empty")

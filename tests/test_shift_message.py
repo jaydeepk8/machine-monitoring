@@ -19,9 +19,11 @@ import shift_message  # noqa: E402
 import shift_report  # noqa: E402
 from fixture import build  # noqa: E402
 from settings import load_settings  # noqa: E402
-from shift_message import compose, deliver, load_context, latest_shift, retry_failed  # noqa: E402
+from shift_message import (BODY_LIMIT, TEMPLATES, compose, deliver, fill, load_context,  # noqa: E402
+                           latest_shift, retry_failed, template_values)
 from store import query  # noqa: E402
-from whatsapp import FileSender, SendError, Sent, WasenderSender, read_reply  # noqa: E402
+from whatsapp import (FileSender, MetaSender, SendError, Sent, WasenderSender, make_sender,  # noqa: E402
+                      read_meta_reply, read_reply)
 
 EXAMPLE = ROOT / "settings" / "example_client.json"
 PEOPLE = [{"name": "Owner", "phone": "+919800000001", "lang": "mr"},
@@ -178,6 +180,14 @@ def test_each_recipient_gets_one_message_in_their_language(db, tmp_path):
     assert len(outbox(db)) == 2
 
 
+def test_reset_lets_a_test_day_be_sent_again(db, tmp_path):
+    s = settings_with(tmp_path, recipients=PEOPLE)
+    report(s, db, tmp_path)
+    shift_report.reset(db)
+    shift_message.reset(db)
+    assert report(s, db, tmp_path)[0]["messages"] == 2
+
+
 def test_no_recipients_no_outbox(db, tmp_path):
     report(settings_with(tmp_path), db, tmp_path)
     tables = {r[0] for r in sqlite3.connect(db).execute("SELECT name FROM sqlite_master")}
@@ -191,8 +201,9 @@ class FakeSender:
         self.results = list(results)
         self.sent = []
 
-    def send(self, phone, text, label=""):
+    def send(self, phone, text, label="", **extra):
         self.sent.append(phone)
+        self.extra = getattr(self, "extra", []) + [extra]
         return self.results.pop(0)
 
 
@@ -267,10 +278,10 @@ def test_a_crash_while_sending_keeps_what_already_went(queued):
     s, db = queued
 
     class Breaks(FakeSender):
-        def send(self, phone, text, label=""):
+        def send(self, phone, text, label="", **extra):
             if self.sent:
                 raise RuntimeError("power cut")
-            return super().send(phone, text, label)
+            return super().send(phone, text, label, **extra)
 
     with pytest.raises(RuntimeError):
         deliver(s, db, Breaks(Sent(ok=True)), now=T0, sleep=lambda _: None)
@@ -369,3 +380,157 @@ def test_a_missing_key_leaves_the_messages_waiting(queued, monkeypatch):
     with pytest.raises(SendError):
         deliver(s, db, now=T0)
     assert set(outbox(db)["status"]) == {"PENDING"}
+
+
+# ---- Meta's official API, without the network
+
+def test_the_template_values_are_one_line_each_and_fill_the_template(day):
+    s, rows, context = day
+    for lang in ("en", "mr", "hi"):
+        values = template_values(s, rows, context, lang)
+        assert len(values) == 6
+        assert all(v and "\n" not in v and "\t" not in v and "     " not in v for v in values)
+        body = fill(TEMPLATES[lang], values)
+        assert "{{" not in body and len(body) <= BODY_LIMIT
+    en = fill(TEMPLATES["en"], template_values(s, rows, context, "en"))
+    assert "Parts made: 430" in en
+    assert "Why: Lowest OEE: V61. It stood still 198.9 min" in en
+    assert "Quality was not measured" in en
+
+
+def test_the_templates_obey_metas_rules():
+    for lang, body in TEMPLATES.items():
+        # a value may not be the first or last thing, and the six are numbered in order
+        assert not body.startswith("{{") and not body.rstrip(".").endswith("}}"), lang
+        assert [int(n) for n in re.findall(r"{{(\d+)}}", body)] == [1, 2, 3, 4, 5, 6], lang
+        assert len(body) < BODY_LIMIT
+
+
+def test_the_template_and_the_text_carry_the_same_numbers(day):
+    s, rows, context = day
+    for lang in ("en", "mr", "hi"):
+        text = compose(s, rows, context, lang)
+        body = fill(TEMPLATES[lang], template_values(s, rows, context, lang))
+        assert numbers(body) == numbers(text), lang
+
+
+def test_a_long_list_is_cut_to_fit_and_says_how_much_was_left_out(tmp_path):
+    s = settings_with(tmp_path)
+    notes = [f"ideal time missing for program {n}" for n in range(1000, 1060)]
+    rows = summary_rows(notes=json.dumps(notes))
+    values = template_values(s, rows, {}, "en")
+    assert len(fill(TEMPLATES["en"], values)) <= BODY_LIMIT
+    assert re.search(r"and \d+ more$", values[5])
+
+
+def test_nothing_to_look_at_still_fills_the_value(tmp_path):
+    s = settings_with(tmp_path)
+    rows = summary_rows(oee_pct=None, availability_pct=None, performance_pct=None, longest_stop=None)
+    values = template_values(s, rows, {}, "mr")
+    assert values[4] == "काही नाही" and values[5] == "काही नाही"
+
+
+def test_the_outbox_keeps_the_template_values(db, tmp_path):
+    s = settings_with(tmp_path, recipients=PEOPLE)
+    report(s, db, tmp_path)
+    box = outbox(db).set_index("name")
+    assert json.loads(box.loc["Owner", "params"])[2] == "430"
+    sender = FakeSender(Sent(ok=True), Sent(ok=True))
+    deliver(s, db, sender, now=T0, sleep=lambda _: None)
+    assert sender.extra[0]["lang"] == "mr" and sender.extra[0]["params"][2] == "430"
+
+
+def test_an_old_outbox_gets_the_new_column(db):
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE outbox (date TEXT, shift TEXT, name TEXT, phone TEXT, lang TEXT, text TEXT, "
+                "status TEXT, attempts INTEGER, next_try_at TEXT, last_error TEXT, message_id TEXT, "
+                "queued_at TEXT, sent_at TEXT, PRIMARY KEY (date, shift, phone))")
+    shift_message.open_outbox(con)
+    assert "params" in {r[1] for r in con.execute("PRAGMA table_info(outbox)")}
+    con.close()
+
+
+def meta(opener):
+    return MetaSender("123456789012345", "shift_report", "v27.0", token="tok-secret", opener=opener)
+
+
+ACCEPTED = {"messaging_product": "whatsapp", "contacts": [{"input": "+919800000001", "wa_id": "919800000001"}],
+            "messages": [{"id": "wamid.HBgM"}]}
+
+
+def test_meta_gets_the_documented_template_request():
+    opener, calls = opener_returning(Reply(200, ACCEPTED))
+    r = meta(opener).send("+919800000001", "free text is not used", lang="mr", params=["a", "b", 430])
+    assert r.ok and r.message_id == "wamid.HBgM"
+    req = calls[0]
+    assert req.full_url == "https://graph.facebook.com/v27.0/123456789012345/messages"
+    assert req.get_header("Authorization") == "Bearer tok-secret"
+    assert json.loads(req.data.decode("utf-8")) == {
+        "messaging_product": "whatsapp", "recipient_type": "individual", "to": "+919800000001",
+        "type": "template",
+        "template": {"name": "shift_report", "language": {"code": "mr"},
+                     "components": [{"type": "body", "parameters": [
+                         {"type": "text", "text": "a"}, {"type": "text", "text": "b"},
+                         {"type": "text", "text": "430"}]}]},
+    }
+
+
+def test_meta_test_message_is_hello_world():
+    opener, calls = opener_returning(Reply(200, ACCEPTED))
+    assert meta(opener).test("+919800000001", "ignored").ok
+    body = json.loads(calls[0].data.decode("utf-8"))
+    assert body["template"] == {"name": "hello_world", "language": {"code": "en_US"}}
+
+
+def meta_error(code, message="x", details=""):
+    return json.dumps({"error": {"message": f"(#{code}) {message}", "type": "OAuthException", "code": code,
+                                 "error_data": {"messaging_product": "whatsapp", "details": details}}}).encode()
+
+
+def test_meta_busy_or_temporary_faults_are_tried_again():
+    for code in (130429, 131056, 131000, 2, 80007):
+        assert read_meta_reply(400, meta_error(code)).retry, code
+    day = read_meta_reply(400, meta_error(131049))
+    assert day.retry and day.retry_after == 24 * 3600
+    assert read_meta_reply(503, b"").retry
+
+
+def test_meta_setup_mistakes_need_a_person_and_say_what_to_do():
+    expired = read_meta_reply(401, meta_error(190, "Access token has expired"))
+    assert not expired.retry and "expired" in expired.error
+    template = read_meta_reply(404, meta_error(132001, "Template name does not exist in the translation"))
+    assert not template.retry and "not approved yet" in template.error
+    allowed = read_meta_reply(400, meta_error(131030, "Recipient phone number not in allowed list"))
+    assert not allowed.retry and "add this phone as a recipient" in allowed.error
+
+
+def test_meta_never_logs_the_token():
+    opener, _ = opener_returning(http_error(401, json.loads(meta_error(190))))
+    r = meta(opener).send("+919800000001", "", params=["1"])
+    assert not r.ok and "tok-secret" not in r.error
+
+
+def test_meta_no_internet_means_try_again():
+    opener, _ = opener_returning(urllib.error.URLError("getaddrinfo failed"))
+    r = meta(opener).send("+919800000001", "", params=["1"])
+    assert r.retry and not r.ok
+
+
+def test_meta_without_values_does_not_send():
+    opener, calls = opener_returning(Reply(200, ACCEPTED))
+    assert not meta(opener).send("+919800000001", "text only").ok
+    assert calls == []
+
+
+def test_meta_needs_a_token_and_a_number(monkeypatch, tmp_path):
+    monkeypatch.delenv("WHATSAPP_TOKEN", raising=False)
+    with pytest.raises(SendError, match="WHATSAPP_TOKEN"):
+        MetaSender("123", "shift_report")
+    with pytest.raises(ValueError, match="meta_phone_number_id"):
+        settings_with(tmp_path, provider="meta")
+    with pytest.raises(ValueError, match="meta_template"):
+        settings_with(tmp_path, meta_template="Shift Report")
+    s = settings_with(tmp_path, provider="meta", meta_phone_number_id="123456789012345")
+    monkeypatch.setenv("WHATSAPP_TOKEN", "t")
+    sender = make_sender(s)
+    assert isinstance(sender, MetaSender) and sender.url.endswith("/v27.0/123456789012345/messages")

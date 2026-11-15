@@ -37,7 +37,8 @@ if __name__ == "__main__":
     p.add_argument("--source", choices=["csv", "live"], default="live")
     p.add_argument("--every", type=float, default=10, help="seconds between runs")
     p.add_argument("--times", type=int, default=0, help="stop after this many runs (0 = never)")
-    p.add_argument("--fresh", action="store_true", help="delete old alerts and shift reports before starting")
+    p.add_argument("--fresh", action="store_true",
+                   help="delete old alerts, shift reports and WhatsApp messages before starting")
     a = p.parse_args()
 
     settings = load_settings(a.settings)
@@ -48,6 +49,7 @@ if __name__ == "__main__":
     if a.fresh:
         alerts.reset()
         shift_report.reset()
+        shift_message.reset()
 
     print(f"running every {a.every:g} seconds from the {a.source} source. Ctrl+C to stop.")
 
