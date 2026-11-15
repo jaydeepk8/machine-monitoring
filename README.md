@@ -87,6 +87,41 @@ Each run calls the API and costs money. Results are saved in `output/evals/`.
 `python -m pytest` checks, without the API, that every expected answer is still
 in the data.
 
+## The end-of-shift WhatsApp message
+
+When a shift's report is written, a short message for each person in the
+settings file is queued with it, in their language (`en`, `mr` or `hi`). It says
+how much (parts, OEE of each machine) and why (what cost the lowest machine
+most, the longest stop), then what to look at: slow programs, maintenance due,
+stops with no reason tapped, and missing readings. Every number is copied from
+the result tables. This part does not use AI.
+
+    "whatsapp": {
+      "provider": "file",
+      "recipients": [{"name": "Owner", "phone": "+919812345678", "lang": "mr"}]
+    }
+
+- `provider: "file"` writes each message to `output/messages/` instead of
+  sending it. Use it to try things out.
+- `provider: "wasender"` sends through [WasenderAPI](https://wasenderapi.com),
+  with the key in `WASENDER_API_KEY`. It costs $6 a month per WhatsApp number
+  after a 3-day trial (the trial allows 1 message a minute, 50 a day). It is not
+  Meta's official API: it works through a WhatsApp number linked by QR code, so
+  WhatsApp can restrict or ban that number. Use a separate SIM, not the owner's
+  own number, and only message people who agreed to it.
+
+`auto_run.py` sends what is waiting, one message every 6 seconds. If the
+internet is down, a message waits and is tried again later, up to 6 times.
+
+    python operations/shift_message.py --show --lang mr       preview, sends nothing
+    python operations/shift_message.py                        the outbox
+    python operations/shift_message.py --retry-failed         try failed ones again
+    python operations/shift_message.py --test +919812345678   one test message
+
+Phone numbers are personal. Keep real client settings in `settings/clients/`,
+which git ignores. The Marathi and Hindi wording is a first draft, to be checked
+by a native speaker.
+
 ## Running the tests
 
     python -m pytest

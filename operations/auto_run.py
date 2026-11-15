@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 
 import alerts
+import shift_message
 import shift_report
 from run_all import LIVE_DB, NoReadings, run
 from settings import load_settings
@@ -66,7 +67,8 @@ if __name__ == "__main__":
                 # live readings stop when the machines do, so the clock decides
                 real = a.source == "live" and clock_mode(LIVE_DB) == "real"
                 for w in shift_report.check(settings, now=live_now(LIVE_DB) if real else None):
-                    print(f"          REPORT   {w['shift']} {w['date']} saved to {w['file']}")
+                    print(f"          REPORT   {w['shift']} {w['date']} saved to {w['file']}, "
+                          f"{w['messages']} message(s) queued")
             except NoReadings as e:
                 print(f"{now}  not saved: {e}")
                 # nothing to calculate, which is exactly when silence must be reported
@@ -78,6 +80,14 @@ if __name__ == "__main__":
             except Exception as e:
                 # keep going. A bad moment must not stop the loop.
                 print(f"{now}  not saved: {type(e).__name__}: {e}")
+
+            # messages wait in the outbox until they go, even while the internet is down
+            if settings["whatsapp"]["recipients"]:
+                try:
+                    for d in shift_message.deliver(settings):
+                        print(f"          WHATSAPP {d['status']:<7}{d['shift']} {d['date']} to {d['name']} {d['error']}")
+                except Exception as e:
+                    print(f"{now}  messages not sent: {type(e).__name__}: {e}")
 
             count += 1
             if a.times and count >= a.times:
