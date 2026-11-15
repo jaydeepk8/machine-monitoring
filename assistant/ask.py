@@ -234,6 +234,8 @@ if __name__ == "__main__":
     p.add_argument("--db", default=RESULTS_DB)
     p.add_argument("--details", action="store_true", help="also print the lookups and token use")
     a = p.parse_args()
+    # Marathi and Hindi must print even when the output goes to a file on Windows
+    sys.stdout.reconfigure(encoding="utf-8")
 
     try:
         answer = ask(a.question, a.lang, a.db)

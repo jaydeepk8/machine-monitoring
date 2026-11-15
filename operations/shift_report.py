@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+import shift_message
 from settings import load_settings
 from store import query
 
@@ -83,6 +84,8 @@ def check(settings, results_db=RESULTS_DB, report_dir=REPORT_DIR, now=None):
 
     zone = settings["timezone"]
     written = []
+    # read before the transaction starts. A shift that ends now is judged on today's tables.
+    context = shift_message.load_context(results_db) if settings["whatsapp"]["recipients"] else {}
 
     con = sqlite3.connect(results_db, timeout=30)
     try:
@@ -110,7 +113,9 @@ def check(settings, results_db=RESULTS_DB, report_dir=REPORT_DIR, now=None):
                 "INSERT INTO shift_reports VALUES (?, ?, ?, ?, ?, ?)",
                 (date, shift, window, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), path, text),
             )
-            written.append({"date": date, "shift": shift, "file": path})
+            # the WhatsApp messages are queued with the report, so neither is saved without the other
+            queued = shift_message.queue(con, settings, rows, context)
+            written.append({"date": date, "shift": shift, "file": path, "messages": queued})
 
         con.commit()
     finally:

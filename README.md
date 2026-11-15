@@ -87,6 +87,94 @@ Each run calls the API and costs money. Results are saved in `output/evals/`.
 `python -m pytest` checks, without the API, that every expected answer is still
 in the data.
 
+## The end-of-shift WhatsApp message
+
+When a shift's report is written, a short message for each person in the
+settings file is queued with it, in their language (`en`, `mr` or `hi`). It says
+how much (parts, OEE of each machine) and why (what cost the lowest machine
+most, the longest stop), then what to look at: slow programs, maintenance due,
+stops with no reason tapped, and missing readings. Every number is copied from
+the result tables. This part does not use AI.
+
+    "whatsapp": {
+      "provider": "file",
+      "recipients": [{"name": "Owner", "phone": "+919812345678", "lang": "mr"}]
+    }
+
+- `provider: "file"` writes each message to `output/messages/` instead of
+  sending it. Use it to try things out.
+- `provider: "meta"` sends through Meta's official WhatsApp Cloud API, with the
+  token in `WHATSAPP_TOKEN`. This is the one to use with shops. Testing on
+  Meta's test number is free. Real messages are charged per delivered message
+  (a utility message in India was about ₹0.12 in late 2026), roughly ₹20 a month
+  for three shifts to two people.
+- `provider: "wasender"` sends through [WasenderAPI](https://wasenderapi.com),
+  with the key in `WASENDER_API_KEY`. It costs $6 a month per WhatsApp number
+  after a 3-day trial (the trial allows 1 message a minute, 50 a day). It is not
+  Meta's official API: it works through a WhatsApp number linked by QR code, so
+  WhatsApp can restrict or ban that number. Use a separate SIM, not the owner's
+  own number, and only message people who agreed to it.
+
+`auto_run.py` sends what is waiting, one message every 6 seconds. If the
+internet is down, a message waits and is tried again later, up to 6 times.
+
+    python operations/shift_message.py --show --lang mr       preview, sends nothing
+    python operations/shift_message.py                        the outbox
+    python operations/shift_message.py --retry-failed         try failed ones again
+    python operations/shift_message.py --test +919812345678   one test message
+    python operations/shift_message.py --template             the Meta templates to submit
+
+### Meta's API: how a message is sent
+
+WhatsApp only lets a business start a chat with a template that Meta has
+approved. A value filled into a template cannot hold a line break, so the
+layout is in the template and each of its 6 values is one line: the shift, the
+shop, parts made, OEE by machine, why, and what to look at. If a long list would
+take the message over Meta's 1024 character limit, the last items are left out
+and the message says how many. `--template` prints the template for each
+language with sample values from the latest shift, ready to paste.
+
+### Trying it on Meta's test number
+
+1. At developers.facebook.com, create an app and add **WhatsApp**. Meta gives
+   it a free test number and a test WhatsApp Business account.
+2. In **WhatsApp > API Setup**, copy the **Phone number ID**. Under **To**, add
+   your own phone and enter the code WhatsApp sends you. The test number only
+   sends to phones added here.
+3. Press **Generate access token** and set it in the terminal, not in a file:
+
+       $env:WHATSAPP_TOKEN = "EAAG..."          # PowerShell
+
+   This token expires quickly. For the edge box, make a System User token with
+   `whatsapp_business_messaging` (Business settings > System users).
+4. Make a settings file in `settings/clients/` with:
+
+       "whatsapp": {
+         "provider": "meta",
+         "meta_phone_number_id": "<the Phone number ID>",
+         "recipients": [{"name": "Me", "phone": "+91<your number>", "lang": "mr"}]
+       }
+
+5. `python operations/shift_message.py --settings settings/clients/<file> --test +91<your number>`
+   sends Meta's ready-made `hello_world` template. If that arrives, the token,
+   the number ID and your phone are right.
+6. In **WhatsApp Manager > Message templates**, create a template named
+   `shift_report`, category **Utility**, language **English**. Paste the English
+   body and samples from `--template` (run `python operations/run_all.py` first
+   if it says there are no results). Add **Marathi** and **Hindi** to the same
+   template the same way. Wait for each to be approved.
+7. Send the simulated day:
+
+       python operations/auto_run.py --settings settings/clients/<file> --source csv --times 1 --fresh
+
+   `--fresh` forgets earlier reports and messages, so the day is sent again.
+   `python operations/shift_message.py --settings settings/clients/<file>` shows
+   whether it went, and Meta's error with a hint if not.
+
+Phone numbers are personal. Keep real client settings in `settings/clients/`,
+which git ignores. The Marathi and Hindi wording is a first draft, to be checked
+by a native speaker.
+
 ## Running the tests
 
     python -m pytest

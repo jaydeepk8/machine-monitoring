@@ -1,8 +1,11 @@
 # reads one client's settings file
 
 import json
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from whatsapp import PHONE, PROVIDERS
 
 # values used when the file does not mention a setting
 DEFAULTS = {
@@ -23,7 +26,22 @@ DEFAULTS = {
         "drift_levels": ["ACT"],
         "maintenance_levels": ["OVERDUE", "DUE SOON"],
     },
+    # the end-of-shift message. No recipients = no message.
+    # Each recipient: {"name": "Owner", "phone": "+919812345678", "lang": "mr"}
+    "whatsapp": {
+        "provider": "file",        # "file" writes to output/messages/, "meta" or "wasender" sends
+        "recipients": [],
+        "seconds_between": 6,      # WasenderAPI's account protection allows 1 message per 5 s
+        "max_attempts": 6,
+        # Meta's official API: the number to send from (API Setup in the Meta app) and the
+        # approved template. The token stays in the WHATSAPP_TOKEN environment variable.
+        "meta_phone_number_id": "",
+        "meta_template": "shift_report",
+        "meta_api_version": "v27.0",
+    },
 }
+
+MESSAGE_LANGUAGES = ("en", "mr", "hi")
 
 # no default. It changes the OEE number, so the file must say it
 REQUIRED = ["client", "shifts", "setup_is_planned"]
@@ -78,6 +96,7 @@ def load_settings(path):
     s = {**DEFAULTS, **given}
     s["drift"] = {**DEFAULTS["drift"], **given.get("drift", {})}
     s["alerts"] = {**DEFAULTS["alerts"], **given.get("alerts", {})}
+    s["whatsapp"] = {**DEFAULTS["whatsapp"], **given.get("whatsapp", {})}
 
     check(s)
     return s
@@ -138,6 +157,33 @@ def check(s):
         raise ValueError("alerts: drift_levels can only hold WATCH and ACT")
     if not set(al["maintenance_levels"]) <= {"OVERDUE", "DUE SOON", "NO RECORD"}:
         raise ValueError("alerts: maintenance_levels can only hold OVERDUE, DUE SOON, NO RECORD")
+
+    w = s["whatsapp"]
+    unknown = set(w) - set(DEFAULTS["whatsapp"])
+    if unknown:
+        raise ValueError(f"unknown whatsapp setting(s): {sorted(unknown)}")
+    if w["provider"] not in PROVIDERS:
+        raise ValueError(f"whatsapp: provider must be one of {', '.join(PROVIDERS)}")
+    if w["seconds_between"] < 0 or w["max_attempts"] < 1:
+        raise ValueError("whatsapp: seconds_between 0 or more, max_attempts 1 or more")
+    if w["provider"] == "meta" and not str(w["meta_phone_number_id"]).isdigit():
+        raise ValueError("whatsapp: meta_phone_number_id must be the number ID from API Setup (digits only)")
+    if not re.fullmatch(r"[a-z0-9_]+", w["meta_template"]):
+        raise ValueError("whatsapp: meta_template is written in small letters, digits and _")
+    if not re.fullmatch(r"v\d+\.\d+", w["meta_api_version"]):
+        raise ValueError("whatsapp: meta_api_version looks like v27.0")
+    phones = []
+    for r in w["recipients"]:
+        r.setdefault("lang", "en")
+        if not r.get("name") or not isinstance(r.get("phone"), str):
+            raise ValueError("whatsapp: every recipient needs a name and a phone")
+        if not PHONE.match(r["phone"]):
+            raise ValueError(f"whatsapp: {r['name']}: phone must look like +919812345678")
+        if r["lang"] not in MESSAGE_LANGUAGES:
+            raise ValueError(f"whatsapp: {r['name']}: lang must be one of {', '.join(MESSAGE_LANGUAGES)}")
+        phones.append(r["phone"])
+    if len(set(phones)) != len(phones):
+        raise ValueError("whatsapp: a phone number is listed twice")
 
     for j in s["maintenance_jobs"]:
         if "job" not in j or j.get("every_h", 0) <= 0:
